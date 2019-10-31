@@ -1,0 +1,91 @@
+steps:
+- name: tarosky/gcbseq
+  args:
+  - -n
+  - cloudbuild-gcbseq-production
+  - -o
+  - work/BUILD_NUMBER
+  env:
+  - PROJECT_ID=$PROJECT_ID
+
+- name: gcr.io/cloud-builders/gcloud
+  # Decrypt Dockerhub username
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -eu
+    base64 -d <<< "$_ENCRYPTED_DOCKERHUB_USERNAME" | gcloud kms decrypt \
+      --ciphertext-file=- \
+      --plaintext-file="work/dockerhub-username.txt" \
+      --location=global \
+      --keyring=cloudbuild \
+      --key=dockerhub_username
+
+- name: gcr.io/cloud-builders/gcloud
+  # Decrypt Dockerhub access token
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -eu
+    base64 -d <<< "$_ENCRYPTED_DOCKERHUB_ACCESS_TOKEN" | gcloud kms decrypt \
+      --ciphertext-file=- \
+      --plaintext-file="work/dockerhub-access-token.txt" \
+      --location=global \
+      --keyring=cloudbuild \
+      --key=dockerhub_access_token
+
+- name: gcr.io/cloud-builders/docker
+  args:
+  - image
+  - build
+  - -t
+  - tarosky/gcbseq:latest
+  - .
+
+- name: gcr.io/cloud-builders/docker
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -eu
+    docker image tag tarosky/gcbseq:latest "gcr.io/$PROJECT_ID/gcbseq:build-$(< work/BUILD_NUMBER)"
+    docker image push "gcr.io/$PROJECT_ID/gcbseq"
+
+- name: gcr.io/cloud-builders/docker
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -eu
+    if [ "$BRANCH_NAME" = "$_MAIN_BRANCH" ]; then
+      docker login -u "$(< work/dockerhub-username.txt)" --password-stdin <<< "$(< work/dockerhub-access-token.txt)"
+      docker image tag tarosky/gcbseq:latest "tarosky/gcbseq:build-$(< work/BUILD_NUMBER)"
+      docker image push tarosky/gcbseq
+    fi
+
+substitutions:
+  # _ENCRYPTED_DOCKERHUB_USERNAME was generated using the following command:
+  #
+  # gcloud kms encrypt \
+  #  --plaintext-file=dockerhub_username.txt \
+  #  --ciphertext-file=- \
+  #  --location=global \
+  #  --keyring=cloudbuild \
+  #  --key=dockerhub_username | base64 -w 0
+  _ENCRYPTED_DOCKERHUB_USERNAME: CiQA9v6UnvYMxxxm5op9JPh/uBIPBqL3Wm+DP4xLitlHDSjni1ISLgDorC3uHqh+JGFfCkxG62B3WR8lEaDG8Zoy00TI43ce++7QYrgSBE+7YbPYtEs=
+
+  # _ENCRYPTED_DOCKERHUB_ACCESS_TOKEN was generated using the following command:
+  #
+  # gcloud kms encrypt \
+  #  --plaintext-file=dockerhub_access_token.txt \
+  #  --ciphertext-file=- \
+  #  --location=global \
+  #  --keyring=cloudbuild \
+  #  --key=dockerhub_access_token | base64 -w 0
+  _ENCRYPTED_DOCKERHUB_ACCESS_TOKEN: CiQAUl0gxx2eemoZDWOEJ3E/nw2tPk4UGsZvk4YSn57wo+TWfVcSTQCRRYqvqQhqNtnt3J6E3M3K+L2Yvqc1cY7gr9IyhvpLHd/lAFDFcw8NXdw9L3MA+klh1lUtNVzU+zVLC+OCheS2vK8uHZDIwKkUJhfT
+  _MAIN_BRANCH: master
+
+images:
+- gcr.io/$PROJECT_ID/gcbseq
